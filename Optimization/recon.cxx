@@ -11,8 +11,11 @@
 
 #include <iostream>
 #include <fstream>
-#include <recon_lib.h>
 #include <armadillo>
+
+#include "gridFFT.h"
+#include "ArrayTemplates.hpp"
+#include "tictoc.hpp"
 
 using namespace std;
 using arma::mat;
@@ -64,7 +67,7 @@ int main(int argc, char **argv){
 	Array< float, 3> kw(N,shots,1,ColumnMajorArray<3>());
 	Array< float, 3> kspace( N,shots,1,ColumnMajorArray<3>());
 
-	float initial_energy;
+	float initial_energy=0.0;
 	float best_error;
 
 	// Setup Gridding + FFT Structure
@@ -308,7 +311,29 @@ int main(int argc, char **argv){
 
 	}	
 
-
+	
+	
+	fid = fopen("Optimal.rotation","w");
+	Array< float,3>Roptimal(3,3,shots,ColumnMajorArray<3>());
+	for(int shot=0; shot<shots; shot++){
+		
+		// Setup Test Angles		
+		double ux = xdir[shot];
+		double uy = ydir[shot];
+		double uz = zdir[shot];
+		double om = omega[shot];
+		
+		mat Rnet(3,3);
+		Rnet = get_rotation_matrix(ux,uy,uz,omega[shot]);
+		for(int i=0; i<3; i++){
+			for(int j=0; j<3; j++){
+				float temp = Rnet(i,j);
+				fwrite(&temp,sizeof(float),1,fid); 
+			}
+		}
+	
+	}
+	fclose(fid);
 
 
 	return(0);
