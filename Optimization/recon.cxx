@@ -22,10 +22,7 @@ using arma::mat;
 using arma::vec;
 using namespace NDarray;
 
-double gettime(void);
-void temp_recon(int argc, char **argv);
 mat get_rotation_matrix(float ux,float uy, float uz,float omega);
-float randn(void);
 
 int main(int argc, char **argv){
 
@@ -54,7 +51,6 @@ int main(int argc, char **argv){
 	float *ydir = new float[shots];
 	float *zdir = new float[shots];
 	float *omega = new float[shots];
-	float *omega_test = new float[shots];
 	fread(xdir,sizeof(float),shots,fid);	
 	fread(ydir,sizeof(float),shots,fid);	
 	fread(zdir,sizeof(float),shots,fid);	
@@ -68,8 +64,7 @@ int main(int argc, char **argv){
 	Array< float, 3> kspace( N,shots,1,ColumnMajorArray<3>());
 
 	float initial_energy=0.0;
-	float best_error;
-
+	
 	// Setup Gridding + FFT Structure
 	gridFFT gridding;
 	gridding.kernel_type =TRIANGLE_KERNEL;
@@ -90,10 +85,10 @@ int main(int argc, char **argv){
 		double uy = ydir[shot];
 		double uz = zdir[shot];
 
-		omega_test[shot] = 2.0*3.14156*( (float)rand() / (float)RAND_MAX);
+		omega[shot] = 2.0*3.14156*( (float)rand() / (float)RAND_MAX);
 
 		mat Rnet(3,3);
-		Rnet = get_rotation_matrix(ux,uy,uz,omega_test[shot]);
+		Rnet = get_rotation_matrix(ux,uy,uz,omega[shot]);
 
 		for(int pos = 0; pos<N; pos++){
 			vec k(3);
@@ -142,7 +137,8 @@ int main(int argc, char **argv){
 	Array< float, 3> kPhantom(1,shots,N,ColumnMajorArray<3>());
 	kPhantom = 1.0;
 	kOnes = 1.0;
-
+	
+	int total_threads = omp_get_max_threads();
 
 	cout << "Start optimization" << endl;
 	
@@ -151,16 +147,20 @@ int main(int argc, char **argv){
 	gridding.grid_forward( X, kw, kxspace, kyspace,kzspace);
 	gridding.grid_backward( X, kspace, kxspace, kyspace,kzspace);
 	
+	int update_batch = 256;
+	float delta_error = 9;
+	float old_error;
 	bool check_psf = true;
 	tictoc T;
 	arma::uvec indices;
-	for(int iter=0; iter< shots*20; iter++){
+	
+	for(int iter=0; (iter< shots*20) && (delta_error > 1e-6); iter++){
 		
 		//cout << "Iter = " << iter << endl;
 		
 		// Get cost
-		if( iter%100==0){
-			omp_set_num_threads(omp_get_max_threads());
+		if( iter%update_batch==0){
+			omp_set_num_threads(total_threads);
 		
 			T.tic();
 			X =0;
@@ -183,31 +183,35 @@ int main(int argc, char **argv){
 					cost(shot) += temp*temp;
 				}
 			}
-		 	indices = sort_index( cost,"descend");
-
+		 	// Arma 4:indices = sort_index( cost,"descend");
+			// Arma 3.6
+			indices = sort_index( cost,1);
 
 			if( check_psf){
 				Array< complex<float>,3>PSF(sizeX,sizeY,sizeZ,ColumnMajorArray<3>());
-				for(int k=0; k< PSF.length(thirdDim); k++){
-					for(int j=0; j< PSF.length(secondDim); j++){
-						for(int i=0; i< PSF.length(firstDim); i++){
-							PSF(i,j,k) = X(i,j,k);
-						}
-					}
-				}
+				PSF = X;
 				//fftshift(PSF);
 				fft(PSF);
 				{
 					Array< complex<float>,2> Pslice = PSF(Range::all(),Range::all(),(int)(PSF.length(thirdDim)/2)); 
 					ArrayWriteMagAppend(Pslice,"PSF_Slice.dat");
 				}
+				
+				if(iter==0){
+					ArrayWriteMag(PSF,"InitialPSF.dat");
+				}
 			}
-
-			cout << "Iter " << iter << "::Image Energy = " << (sum(sqr(X))/initial_energy) << endl;
+			
+			float current_error = (sum(sqr(X))/initial_energy);
+			if(iter > 0){
+				delta_error =  old_error - current_error;
+			}
+			old_error = current_error;
+			cout << "Iter " << iter << "::Image Energy = " << current_error << ", Delta = " << delta_error << endl;
 		}
 
 
-		int shot = indices(iter%100);
+		int shot = indices(iter%update_batch);
 
 		
 		// Degrid the shot
@@ -256,19 +260,19 @@ int main(int argc, char **argv){
 
 		// Grid backwards
 		T.tic();
-		omp_set_num_threads(omp_get_max_threads());
+		omp_set_num_threads(total_threads);
 		gridding.grid_backward(X, kTest, kxTest, kyTest,kzTest);
 		//cout << "\tBackwards = " << T << endl;
 
 		//Find Min point
 		T.tic();
 		double best_cost = 0;
-		int best_omega;
+		int best_omega =0;
 		for(int test=0; test<test_shots; test++){
 
 			double current_cost = 0.0;
 			for(int pos = 0; pos<N; pos++){
-				current_cost += abs(kTest(pos,test,0));
+				current_cost += pow(abs(kTest(pos,test,0)),2);
 			}
 
 			if( (current_cost < best_cost) || (test==0)){
@@ -303,15 +307,25 @@ int main(int argc, char **argv){
 		//gridding.grid_backward( kspace[0][shot], kxspace[0][shot], kyspace[0][shot],kzspace[0][shot],kw[0][shot],N);
 		//cout << "\tRegrid = " << T << endl;				
 
-		{
-			Array< float,2> Xslice = X(Range::all(),Range::all(),(int)(X.length(thirdDim)/2)); 
-			ArrayWriteAppend(Xslice,"X.dat");
-		}
+		// {
+		//	Array< float,2> Xslice = X(Range::all(),Range::all(),(int)(X.length(thirdDim)/2)); 
+		//	ArrayWriteAppend(Xslice,"X.dat");
+		// }
 
 
 	}	
-
 	
+	
+	if(check_psf){
+		Array< complex<float>,3>PSF(sizeX,sizeY,sizeZ,ColumnMajorArray<3>());
+		PSF = X;
+		fft(PSF);
+		ArrayWriteMag(PSF,"FinalPSF.dat");
+	}	
+	
+	fid = fopen("OptimalOmega.dat","w");
+	fwrite(omega,sizeof(float),shots,fid);
+	fclose(fid);
 	
 	fid = fopen("Optimal.rotation","w");
 	Array< float,3>Roptimal(3,3,shots,ColumnMajorArray<3>());
@@ -321,7 +335,6 @@ int main(int argc, char **argv){
 		double ux = xdir[shot];
 		double uy = ydir[shot];
 		double uz = zdir[shot];
-		double om = omega[shot];
 		
 		mat Rnet(3,3);
 		Rnet = get_rotation_matrix(ux,uy,uz,omega[shot]);
@@ -337,17 +350,6 @@ int main(int argc, char **argv){
 
 
 	return(0);
-}
-
-float randn(void){
-	int counts = 20;
-
-	float val=0.0;
-	for(float pos=0; pos< counts; pos++){
-		val += (float)rand() - ((float)RAND_MAX)/2.0;
-	}	
-	val /=  ( ((float)RAND_MAX)/sqrt(12.0) )*sqrt( (float)counts);
-	return(val);
 }
 
 mat get_rotation_matrix(float ux,float uy, float uz,float omega){
@@ -390,5 +392,4 @@ mat get_rotation_matrix(float ux,float uy, float uz,float omega){
 
 	return(Rnet);
 }
-
 
