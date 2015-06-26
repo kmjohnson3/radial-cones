@@ -8,6 +8,10 @@ This matlab based code will generate the base cone trajectory.  See Generation/r
 # Optimization code #
 This C++ based code optimizing the radial trajectory utilizing and outpute file "RadialCones.struct" from the matlab code. This code exports a set of rotation matrix of 3 x 3 x #shots. This code requires Armadillo (Matrix library), FFTW (dft), Blitz++ (array library), HDF5_cpp (i/o).  This code was run in a Ubunutu 14.04 base machine with the libraries configures as below:
 
+```
+#!c++
+
+
 "acml-5-3-1-gfortran-64bit.tar" (support for armadillo)
 ./install-acml-5-3-1-gfortran-64bit.sh -accept -installdir=${HOME}/local/acml/  
 
@@ -22,3 +26,7 @@ This C++ based code optimizing the radial trajectory utilizing and outpute file 
 
 "blitz-0.10.tar"
 ./configure --prefix=${HOME}/local/
+
+
+
+```
